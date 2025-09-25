@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 from typing import List, Literal, Annotated
+import threading
+from flask import Flask
 
 class Question(BaseModel):
     question: str
@@ -26,11 +28,21 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_KEY")
 ALLOWED_CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
+prompt = os.getenv("CUSTOM_PROMPT", "You are making 50 multiple-choice test questions. \
+                Each question has 4 answer choices (A, B, C, D). Provide the correct answer letter \
+                and an explanation for each question.")
+upload_desc = os.getenv("CUSTOM_UPLOAD_DESC", "Upload a pdf.")
+end_desc = os.getenv("CUSTOM_END_DESC", "End class.")
+generate_desc = os.getenv("CUSTOM_GENERATE_DESC", "Generate a quiz.")
+question_desc = os.getenv("CUSTOM_QUESTION_DESC", "Get the current question.")
+answer_desc = os.getenv("CUSTOM_ANSWER_DESC", "Send in your answer.")
+nextquestion_desc = os.getenv("CUSTOM_NEXTQUESTION_DESC", "Move to the next question.")
+
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 quiz_session = {
@@ -41,31 +53,47 @@ quiz_session = {
     "last_activity": None
 }
 
-@bot.command()
-async def upload(ctx):
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = threading.Thread(target=run_flask)
+    t.start()
+
+@bot.tree.command(name="upload", description=upload_desc)
+async def upload(interaction: discord.Interaction, file: discord.Attachment):
     global quiz_session
 
     if quiz_session["active"]:
-        await ctx.send("❌ A session is already running! End it with `/end` before uploading a new PDF.")
+        await interaction.response.send_message("❌ A session is already running! End it with `/end` before uploading a new PDF.")
         return
     
-    if ctx.message.attachments:
-        file = ctx.message.attachments[0]
-        await file.save("temp.pdf")
-        doc = fitz.open("temp.pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        
-        quiz_session["text"] = text
-        quiz_session["questions"] = []
-        quiz_session["current"] = 0
-        quiz_session["last_activity"] = datetime.now(timezone.utc)
-        quiz_session["active"] = True
+    await interaction.response.defer(thinking=True)  
+    
+    if not file.filename.endswith(".pdf"):
+        await interaction.followup.send("⚠️ Please upload a PDF file.")
+        return
+    
+    await file.save("temp.pdf")
+    doc = fitz.open("temp.pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    
+    quiz_session["text"] = text
+    quiz_session["questions"] = []
+    quiz_session["current"] = 0
+    quiz_session["last_activity"] = datetime.now(timezone.utc)
+    quiz_session["active"] = True
 
-        await ctx.send("✅ PDF loaded! Use `/generate` to create a question bank.")
-    else:
-        await ctx.send("❌ Please attach a PDF file.")
+    await interaction.followup.send("✅ PDF loaded! Use `/generate` to create a question bank.")
 
 @tasks.loop(minutes=5)
 async def check_timeout():
@@ -83,10 +111,11 @@ async def check_timeout():
 @bot.event
 async def on_ready():
     check_timeout.start()
+    await bot.tree.sync()
     print(f"Logged in as {bot.user}")
 
-@bot.command()
-async def end(ctx):
+@bot.tree.command(name="end", description=end_desc)
+async def end(interaction: discord.Interaction):
     global quiz_session
     quiz_session.update({
         "active": False,
@@ -95,24 +124,23 @@ async def end(ctx):
         "current": 0,
         "last_activity": None
     })
-    await ctx.send("🛑 Session ended.")
+    await interaction.response.send_message("🛑 Session ended.")
 
-@bot.command()
-async def generate(ctx):
+@bot.tree.command(name="generate", description=generate_desc)
+async def generate(interaction: discord.Interaction):
     global quiz_session
     
     if not quiz_session["active"]:
-        await ctx.send("❌ No session active. Upload a PDF first with `/upload`.")
+        await interaction.response.send_message("❌ No session active. Upload a PDF first with `/upload`.")
         return
     
+    await interaction.response.defer(thinking=True)
     text = quiz_session["text"]
 
     response = client.responses.parse(
         model="gpt-4o-mini",
         input=[
-            {"role": "system", "content": "You are making 50 multiple-choice test questions. \
-                Each question has 4 answer choices (A, B, C, D). Provide the correct answer letter \
-                and an explanation for each question. The questions should be challenging and thorough."},
+            {"role": "system", "content": prompt },
             {
                 "role": "user",
                 "content": f"Base the questions strictly on this text: {text}",
@@ -127,21 +155,21 @@ async def generate(ctx):
     quiz_session["current"] = 0
     quiz_session["last_activity"] = datetime.now(timezone.utc)
     
-    await ctx.send("Generated 50 questions! Use /question to get one.")
+    await interaction.followup.send("Generated 50 questions! Use /question to get one.")
 
-@bot.command()
-async def question(ctx):
+@bot.tree.command(name="question", description=question_desc)
+async def question(interaction: discord.Interaction):
     global quiz_session
     
     if not quiz_session["active"] or not quiz_session["questions"]:
-        await ctx.send("❌ No active quiz. Use `/upload` and `/generate` first.")
+        await interaction.response.send_message("❌ No active quiz. Use `/upload` and `/generate` first.")
         return
     
     current = quiz_session["current"]
     questions = quiz_session["questions"]
     
     if current >= len(questions):
-        await ctx.send("🎉 Quiz finished! Use `/generate` to make new questions or `/end` to close session.")
+        await interaction.response.send_message("🎉 Quiz finished! Use `/generate` to make new questions or `/end` to close session.")
         return
     
     q = questions[current]
@@ -155,46 +183,47 @@ async def question(ctx):
     """
 
     quiz_session["last_activity"] = datetime.now(timezone.utc)
-    await ctx.send(msg)
+    await interaction.response.send_message(msg)
 
-@bot.command()
-async def answer(ctx, choice: str):
+@bot.tree.command(name="answer", description=answer_desc)
+async def answer(interaction: discord.Interaction, choice: str):
     global quiz_session
     
     if not quiz_session["active"] or not quiz_session["questions"]:
-        await ctx.send("❌ No active quiz.")
+        await interaction.response.send_message("❌ No active quiz.")
         return
     
     current = quiz_session["current"]
     questions = quiz_session["questions"]
     
     if current >= len(questions):
-        await ctx.send("🎉 Quiz finished! No more questions.")
+        await interaction.response.send_message("🎉 Quiz finished! No more questions.")
         return
     
     q = questions[current]
     if choice.upper() == q.correct_answer:
-        await ctx.send(f"✅ Correct! {q.correct_answer_explanation}")
+        await interaction.response.send_message(f"✅ Correct! {q.correct_answer_explanation}")
     else:
-        await ctx.send(f"❌ Wrong. Correct answer is {q.correct_answer} — {q.correct_answer_explanation}")
+        await interaction.response.send_message(f"❌ Wrong. Correct answer is {q.correct_answer} — {q.correct_answer_explanation}")
     
     quiz_session["last_activity"] = datetime.now(timezone.utc)
 
-@bot.command()
-async def nextquestion(ctx):
+@bot.tree.command(name="nextquestion", description=nextquestion_desc)
+async def nextquestion(interaction: discord.Interaction):
     global quiz_session
     
     if not quiz_session["active"] or not quiz_session["questions"]:
-        await ctx.send("❌ No active quiz.")
+        await interaction.response.send_message("❌ No active quiz.")
         return
     
     quiz_session["current"] += 1
     
     if quiz_session["current"] >= len(quiz_session["questions"]):
-        await ctx.send("🎉 All questions answered! Use `/generate` to create more or `/end` to close session.")
+        await interaction.response.send_message("🎉 All questions answered! Use `/generate` to create more or `/end` to close session.")
     else:
-        await ctx.send(f"➡️ Moving to Question {quiz_session['current']+1}. Use `/question` to view it.")
+        await interaction.response.send_message(f"➡️ Moving to Question {quiz_session['current']+1}. Use `/question` to view it.")
     
     quiz_session["last_activity"] = datetime.now(timezone.utc)
 
+keep_alive()
 bot.run(DISCORD_TOKEN)
