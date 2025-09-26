@@ -16,7 +16,8 @@ class Question(BaseModel):
     choice_B: str
     choice_C: str
     choice_D: str
-    correct_answer: Literal["A", "B", "C", "D"]
+    choice_E: str
+    correct_answer: Literal["A", "B", "C", "D", "E"]
     correct_answer_explanation: str
 
 class Quiz(BaseModel):
@@ -29,7 +30,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_KEY")
 ALLOWED_CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 prompt = os.getenv("CUSTOM_PROMPT", "You are making 50 multiple-choice test questions. \
-                Each question has 4 answer choices (A, B, C, D). Provide the correct answer letter \
+                Each question has 5 answer choices (A, B, C, D, E). Provide the correct answer letter \
                 and an explanation for each question.")
 upload_desc = os.getenv("CUSTOM_UPLOAD_DESC", "Upload a pdf.")
 end_desc = os.getenv("CUSTOM_END_DESC", "End class.")
@@ -37,6 +38,7 @@ generate_desc = os.getenv("CUSTOM_GENERATE_DESC", "Generate a quiz.")
 question_desc = os.getenv("CUSTOM_QUESTION_DESC", "Get the current question.")
 answer_desc = os.getenv("CUSTOM_ANSWER_DESC", "Send in your answer.")
 nextquestion_desc = os.getenv("CUSTOM_NEXTQUESTION_DESC", "Move to the next question.")
+shownextquestion_desc = os.getenv("CUSTOM_SHOWNEXTQUESTION_DESC", "Move to the next question and show the question.")
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -180,6 +182,7 @@ async def question(interaction: discord.Interaction):
     B) {q.choice_B}
     C) {q.choice_C}
     D) {q.choice_D}
+    E) {q.choice_E}
     """
 
     quiz_session["last_activity"] = datetime.now(timezone.utc)
@@ -224,6 +227,36 @@ async def nextquestion(interaction: discord.Interaction):
         await interaction.response.send_message(f"➡️ Moving to Question {quiz_session['current']+1}. Use `/question` to view it.")
     
     quiz_session["last_activity"] = datetime.now(timezone.utc)
+
+@bot.tree.command(name="shownextquestion", description=shownextquestion_desc)
+async def nextquestion(interaction: discord.Interaction):
+    global quiz_session
+    
+    if not quiz_session["active"] or not quiz_session["questions"]:
+        await interaction.response.send_message("❌ No active quiz. Use `/upload` and `/generate` first.")
+        return
+    
+    quiz_session["current"] += 1
+    current = quiz_session["current"]
+    questions = quiz_session["questions"]
+    
+    if current >= len(questions):
+        await interaction.response.send_message("🎉 Quiz finished! Use `/generate` to make new questions or `/end` to close session.")
+        return
+    
+    q = questions[current]
+    msg = f"""
+    **Q{current+1}**: {q.question}
+
+    A) {q.choice_A}
+    B) {q.choice_B}
+    C) {q.choice_C}
+    D) {q.choice_D}
+    E) {q.choice_E}
+    """
+
+    quiz_session["last_activity"] = datetime.now(timezone.utc)
+    await interaction.response.send_message(msg)
 
 keep_alive()
 bot.run(DISCORD_TOKEN)
