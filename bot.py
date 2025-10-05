@@ -32,6 +32,9 @@ ALLOWED_CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 prompt = os.getenv("CUSTOM_PROMPT", "You are making 50 multiple-choice test questions. \
                 Each question has 5 answer choices (A, B, C, D, E). Provide the correct answer letter \
                 and an explanation for each question.")
+default_prompt = "You are making 50 multiple-choice test questions. \
+                Each question has 5 answer choices (A, B, C, D, E). Provide the correct answer letter \
+                and an explanation for each question."
 upload_desc = os.getenv("CUSTOM_UPLOAD_DESC", "Upload a pdf.")
 end_desc = os.getenv("CUSTOM_END_DESC", "End class.")
 generate_desc = os.getenv("CUSTOM_GENERATE_DESC", "Generate a quiz.")
@@ -143,6 +146,37 @@ async def generate(interaction: discord.Interaction):
         model="gpt-4o-mini",
         input=[
             {"role": "system", "content": prompt },
+            {
+                "role": "user",
+                "content": f"Base the questions strictly on this text: {text}",
+            },
+        ],
+        
+        text_format=Quiz,
+    )
+
+    generated_questions = response.output_parsed.questions
+    quiz_session["questions"] = generated_questions
+    quiz_session["current"] = 0
+    quiz_session["last_activity"] = datetime.now(timezone.utc)
+    
+    await interaction.followup.send("Generated 50 questions! Use /question to get one.")
+
+@bot.tree.command(name="defaultpromptgenerate", description=generate_desc)
+async def default_prompt_generate(interaction: discord.Interaction):
+    global quiz_session
+    
+    if not quiz_session["active"]:
+        await interaction.response.send_message("❌ No session active. Upload a PDF first with `/upload`.")
+        return
+    
+    await interaction.response.defer(thinking=True)
+    text = quiz_session["text"]
+
+    response = client.responses.parse(
+        model="gpt-4o-mini",
+        input=[
+            {"role": "system", "content": default_prompt },
             {
                 "role": "user",
                 "content": f"Base the questions strictly on this text: {text}",
