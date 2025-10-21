@@ -4,3 +4,4 @@ python-dotenv
 flask
 PyMuPDF
 pydantic
+aiohttp

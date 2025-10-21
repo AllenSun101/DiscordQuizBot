@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Annotated
 import threading
 from flask import Flask
+import aiohttp
 
 class Question(BaseModel):
     question: str
@@ -42,6 +43,7 @@ question_desc = os.getenv("CUSTOM_QUESTION_DESC", "Get the current question.")
 answer_desc = os.getenv("CUSTOM_ANSWER_DESC", "Send in your answer.")
 nextquestion_desc = os.getenv("CUSTOM_NEXTQUESTION_DESC", "Move to the next question.")
 shownextquestion_desc = os.getenv("CUSTOM_SHOWNEXTQUESTION_DESC", "Move to the next question and show the question.")
+deployment_url = os.getenv("DEPLOYMENT_URL", "")
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -72,9 +74,19 @@ def keep_alive():
     t = threading.Thread(target=run_flask)
     t.start()
 
+async def keep_alive_ping():
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(deployment_url) as resp:
+                print(f"Pinged self ({resp.status})")
+    except Exception as e:
+        print(f"Ping failed: {e}")
+
 @bot.tree.command(name="upload", description=upload_desc)
 async def upload(interaction: discord.Interaction, file: discord.Attachment):
     global quiz_session
+
+    await keep_alive_ping()
 
     if quiz_session["active"]:
         await interaction.response.send_message("❌ A session is already running! End it with `/end` before uploading a new PDF.")
@@ -134,6 +146,8 @@ async def end(interaction: discord.Interaction):
 @bot.tree.command(name="generate", description=generate_desc)
 async def generate(interaction: discord.Interaction):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"]:
         await interaction.response.send_message("❌ No session active. Upload a PDF first with `/upload`.")
@@ -165,6 +179,8 @@ async def generate(interaction: discord.Interaction):
 @bot.tree.command(name="defaultpromptgenerate", description=generate_desc)
 async def default_prompt_generate(interaction: discord.Interaction):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"]:
         await interaction.response.send_message("❌ No session active. Upload a PDF first with `/upload`.")
@@ -196,6 +212,8 @@ async def default_prompt_generate(interaction: discord.Interaction):
 @bot.tree.command(name="question", description=question_desc)
 async def question(interaction: discord.Interaction):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"] or not quiz_session["questions"]:
         await interaction.response.send_message("❌ No active quiz. Use `/upload` and `/generate` first.")
@@ -225,6 +243,8 @@ async def question(interaction: discord.Interaction):
 @bot.tree.command(name="answer", description=answer_desc)
 async def answer(interaction: discord.Interaction, choice: str):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"] or not quiz_session["questions"]:
         await interaction.response.send_message("❌ No active quiz.")
@@ -248,6 +268,8 @@ async def answer(interaction: discord.Interaction, choice: str):
 @bot.tree.command(name="nextquestion", description=nextquestion_desc)
 async def nextquestion(interaction: discord.Interaction):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"] or not quiz_session["questions"]:
         await interaction.response.send_message("❌ No active quiz.")
@@ -265,6 +287,8 @@ async def nextquestion(interaction: discord.Interaction):
 @bot.tree.command(name="shownextquestion", description=shownextquestion_desc)
 async def nextquestion(interaction: discord.Interaction):
     global quiz_session
+
+    await keep_alive_ping()
     
     if not quiz_session["active"] or not quiz_session["questions"]:
         await interaction.response.send_message("❌ No active quiz. Use `/upload` and `/generate` first.")
